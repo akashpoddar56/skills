@@ -11,13 +11,16 @@ Environment variables required:
     NAUKRI_EMAIL    - Your Naukri.com login email
     NAUKRI_PASSWORD - Your Naukri.com login password
 
-State is persisted in state.json (tracks whether period is currently present).
+State is persisted in state.json. When running in ephemeral environments
+(e.g. scheduled Claude Code sessions), state is committed back to git so it
+survives across sessions.
 """
 
 import os
 import json
 import time
 import sys
+import subprocess
 import logging
 from pathlib import Path
 from datetime import datetime
@@ -28,8 +31,9 @@ except ImportError:
     print("Playwright not installed. Run: pip3 install playwright && playwright install chromium")
     sys.exit(1)
 
-STATE_FILE = Path(__file__).parent / "state.json"
-LOG_FILE = Path(__file__).parent / "updater.log"
+SCRIPT_DIR = Path(__file__).parent
+STATE_FILE = SCRIPT_DIR / "state.json"
+LOG_FILE = SCRIPT_DIR / "updater.log"
 
 logging.basicConfig(
     level=logging.INFO,
@@ -43,6 +47,75 @@ log = logging.getLogger(__name__)
 
 NAUKRI_LOGIN_URL = "https://www.naukri.com/nlogin/login"
 NAUKRI_PROFILE_URL = "https://www.naukri.com/mnjuser/profile"
+
+
+def git_pull_state():
+    """Pull latest state.json from remote so ephemeral runs see the current toggle state."""
+    try:
+        result = subprocess.run(
+            ["git", "fetch", "origin"],
+            cwd=SCRIPT_DIR.parent,
+            capture_output=True, text=True, timeout=30
+        )
+        if result.returncode != 0:
+            log.warning(f"git fetch warning: {result.stderr.strip()}")
+            return
+
+        # Get current branch
+        branch = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=SCRIPT_DIR.parent,
+            capture_output=True, text=True
+        ).stdout.strip()
+
+        # Checkout just the state file from remote to get latest toggle state
+        subprocess.run(
+            ["git", "checkout", f"origin/{branch}", "--", "naukri-profile-updater/state.json"],
+            cwd=SCRIPT_DIR.parent,
+            capture_output=True, text=True
+        )
+        log.info("Fetched latest state.json from remote.")
+    except Exception as e:
+        log.warning(f"Could not pull state from git: {e} — using local state if available.")
+
+
+def git_commit_state():
+    """Commit and push updated state.json so the next ephemeral session picks it up."""
+    try:
+        subprocess.run(
+            ["git", "add", "naukri-profile-updater/state.json"],
+            cwd=SCRIPT_DIR.parent,
+            check=True, capture_output=True
+        )
+        result = subprocess.run(
+            ["git", "diff", "--cached", "--quiet"],
+            cwd=SCRIPT_DIR.parent,
+            capture_output=True
+        )
+        if result.returncode == 0:
+            log.info("state.json unchanged — nothing to commit.")
+            return
+
+        subprocess.run(
+            ["git", "commit", "-m", f"chore: update naukri toggle state [{datetime.utcnow().strftime('%Y-%m-%dT%H:%MZ')}]"],
+            cwd=SCRIPT_DIR.parent,
+            check=True, capture_output=True
+        )
+
+        branch = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=SCRIPT_DIR.parent,
+            capture_output=True, text=True
+        ).stdout.strip()
+
+        subprocess.run(
+            ["git", "push", "origin", branch],
+            cwd=SCRIPT_DIR.parent,
+            check=True, capture_output=True
+        )
+        log.info("state.json committed and pushed.")
+    except subprocess.CalledProcessError as e:
+        log.warning(f"git commit/push failed: {e.stderr.decode() if e.stderr else e} — state not persisted remotely.")
 
 
 def load_state() -> dict:
@@ -67,36 +140,35 @@ def login(page, email: str, password: str):
         page.wait_for_url("**/mnjuser/**", timeout=20000)
         log.info("Login successful.")
     except PlaywrightTimeoutError:
-        # Some flows redirect differently
         if "nlogin" in page.url:
             raise RuntimeError("Login failed — check your credentials.")
         log.info("Login completed (alternate redirect).")
 
 
-def get_current_summary(page) -> str:
+def get_current_summary(page):
     log.info("Navigating to profile page...")
     page.goto(NAUKRI_PROFILE_URL, wait_until="networkidle", timeout=30000)
 
-    # Click the edit icon next to the Professional Summary section
     try:
-        # Wait for the summary section to appear
         page.wait_for_selector('div[class*="widgetHead"] >> text=Professional Summary', timeout=15000)
         summary_section = page.locator('section[class*="summary"], div[class*="summary"]').first
         edit_btn = summary_section.locator('span[class*="edit"], button[class*="edit"]').first
         edit_btn.click()
     except Exception:
-        # Fallback: try generic edit pencil near "Professional Summary" heading
         page.locator('text=Professional Summary').first.scroll_into_view_if_needed()
         page.locator('text=Professional Summary').locator('..').locator('[class*="edit"]').first.click()
 
-    # Wait for textarea / contenteditable to appear
     page.wait_for_selector('textarea[name="summary"], div[contenteditable="true"]', timeout=10000)
 
     textarea = page.locator('textarea[name="summary"]').first
     if not textarea.is_visible():
         textarea = page.locator('div[contenteditable="true"]').first
 
-    current_text = textarea.input_value() if textarea.get_attribute("contenteditable") is None else textarea.inner_text()
+    current_text = (
+        textarea.input_value()
+        if textarea.get_attribute("contenteditable") is None
+        else textarea.inner_text()
+    )
     log.info(f"Current summary length: {len(current_text)} chars")
     return current_text, textarea
 
@@ -104,26 +176,21 @@ def get_current_summary(page) -> str:
 def update_summary(page, textarea, new_text: str):
     tag = textarea.get_attribute("contenteditable")
     if tag is None:
-        # Regular textarea
         textarea.triple_click()
         textarea.fill(new_text)
     else:
-        # Contenteditable div
         textarea.triple_click()
         textarea.type(new_text)
 
     time.sleep(0.5)
 
-    # Click Save button
     save_btn = page.locator('button:has-text("Save"), input[value="Save"]').first
     save_btn.click()
 
     try:
-        # Wait for success toast or modal close
         page.wait_for_selector('[class*="success"], [class*="toast"], [class*="snackbar"]', timeout=10000)
         log.info("Summary saved successfully.")
     except PlaywrightTimeoutError:
-        # Some saves close the modal silently
         log.info("Save completed (no toast detected — may still have succeeded).")
 
 
@@ -135,11 +202,13 @@ def run():
         log.error("Set NAUKRI_EMAIL and NAUKRI_PASSWORD environment variables before running.")
         sys.exit(1)
 
+    # Pull latest state from remote (handles ephemeral containers)
+    git_pull_state()
+
     state = load_state()
     period_was_present = state["period_present"]
     run_count = state["run_count"] + 1
 
-    # Determine what to do: toggle the period
     should_add_period = not period_was_present
 
     action = "Adding" if should_add_period else "Removing"
@@ -147,7 +216,10 @@ def run():
     log.info(f"{action} trailing period in professional summary.")
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
+        browser = p.chromium.launch(
+            headless=True,
+            executable_path=os.environ.get("CHROMIUM_PATH", "/opt/pw-browsers/chromium"),
+        )
         context = browser.new_context(
             user_agent=(
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -162,7 +234,6 @@ def run():
 
             current_text, textarea = get_current_summary(page)
 
-            # Strip any existing trailing period first, then add if needed
             base_text = current_text.rstrip(".")
             new_text = base_text + "." if should_add_period else base_text
 
@@ -176,6 +247,9 @@ def run():
             state["run_count"] = run_count
             state["last_run"] = datetime.now().isoformat()
             save_state(state)
+
+            # Persist state to git so the next ephemeral session picks it up
+            git_commit_state()
 
         except Exception as e:
             log.error(f"Error during update: {e}")
