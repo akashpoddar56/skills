@@ -13,8 +13,8 @@ Schedule: `02:00 → 06:00 → 10:00 → 14:00 → 18:00 → 22:00` (repeats dai
 ### 1. Install dependencies
 
 ```bash
-pip3 install -r requirements.txt
-playwright install chromium
+pip3.13 install -r requirements.txt
+# Chromium is pre-installed at /opt/pw-browsers — no download needed
 ```
 
 ### 2. Create your credentials file
