@@ -1,5 +1,4 @@
 .env
-state.json
 updater.log
 cron.log
 __pycache__/

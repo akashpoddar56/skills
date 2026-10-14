@@ -19,6 +19,7 @@ import json
 import time
 import sys
 import logging
+import subprocess
 from pathlib import Path
 from datetime import datetime
 
@@ -53,6 +54,32 @@ def load_state() -> dict:
 
 def save_state(state: dict):
     STATE_FILE.write_text(json.dumps(state, indent=2))
+    _commit_state(state)
+
+
+def _commit_state(state: dict):
+    repo_root = STATE_FILE.parent.parent
+    try:
+        subprocess.run(
+            ["git", "add", str(STATE_FILE)],
+            cwd=repo_root, check=True, capture_output=True,
+        )
+        msg = (
+            f"chore: naukri summary toggle run #{state['run_count']} "
+            f"({'added' if state['period_present'] else 'removed'} period)"
+        )
+        subprocess.run(
+            ["git", "commit", "-m", msg,
+             "--author=Claude Automation <noreply@anthropic.com>"],
+            cwd=repo_root, check=True, capture_output=True,
+        )
+        subprocess.run(
+            ["git", "push", "-u", "origin", "HEAD"],
+            cwd=repo_root, check=True, capture_output=True,
+        )
+        log.info("State committed and pushed to git.")
+    except subprocess.CalledProcessError as e:
+        log.warning(f"Could not commit state to git: {e.stderr.decode().strip()}")
 
 
 def login(page, email: str, password: str):
