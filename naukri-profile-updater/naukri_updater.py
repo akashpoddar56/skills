@@ -22,6 +22,17 @@ import logging
 from pathlib import Path
 from datetime import datetime
 
+# Load .env from script directory if present
+_env_file = Path(__file__).parent / ".env"
+if _env_file.exists():
+    for _line in _env_file.read_text().splitlines():
+        _line = _line.strip()
+        if _line and not _line.startswith("#") and "=" in _line:
+            _k, _, _v = _line.partition("=")
+            os.environ.setdefault(_k.strip(), _v.strip())
+
+CHROMIUM_EXECUTABLE = "/opt/pw-browsers/chromium-1243/chrome-linux64/chrome"
+
 try:
     from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 except ImportError:
@@ -147,7 +158,10 @@ def run():
     log.info(f"{action} trailing period in professional summary.")
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
+        launch_opts = {"headless": True, "args": ["--no-sandbox"]}
+        if Path(CHROMIUM_EXECUTABLE).exists():
+            launch_opts["executable_path"] = CHROMIUM_EXECUTABLE
+        browser = p.chromium.launch(**launch_opts)
         context = browser.new_context(
             user_agent=(
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
