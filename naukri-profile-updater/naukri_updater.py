@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python3.13
 """
 Naukri.com Professional Summary Auto-Updater
 Toggles a trailing period in your professional summary to keep your profile
@@ -11,6 +11,7 @@ Environment variables required:
     NAUKRI_EMAIL    - Your Naukri.com login email
     NAUKRI_PASSWORD - Your Naukri.com login password
 
+Credentials can also be stored in a .env file next to this script.
 State is persisted in state.json (tracks whether period is currently present).
 """
 
@@ -21,6 +22,15 @@ import sys
 import logging
 from pathlib import Path
 from datetime import datetime
+
+# Load .env file if present (simple key=value parser, no extra deps needed)
+_env_file = Path(__file__).parent / ".env"
+if _env_file.exists():
+    for _line in _env_file.read_text().splitlines():
+        _line = _line.strip()
+        if _line and not _line.startswith("#") and "=" in _line:
+            _k, _, _v = _line.partition("=")
+            os.environ.setdefault(_k.strip(), _v.strip().strip('"').strip("'"))
 
 try:
     from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
@@ -146,8 +156,14 @@ def run():
     log.info(f"--- Run #{run_count} at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ---")
     log.info(f"{action} trailing period in professional summary.")
 
+    # Use pre-installed Chromium when available (cloud/CI environments)
+    _chromium_path = Path("/opt/pw-browsers/chromium")
+    _launch_kwargs: dict = {"headless": True, "args": ["--no-sandbox", "--disable-dev-shm-usage"]}
+    if _chromium_path.exists():
+        _launch_kwargs["executable_path"] = str(_chromium_path)
+
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
+        browser = p.chromium.launch(**_launch_kwargs)
         context = browser.new_context(
             user_agent=(
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
