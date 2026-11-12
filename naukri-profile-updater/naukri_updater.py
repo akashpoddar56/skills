@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python3.13
 """
 Naukri.com Professional Summary Auto-Updater
 Toggles a trailing period in your professional summary to keep your profile
