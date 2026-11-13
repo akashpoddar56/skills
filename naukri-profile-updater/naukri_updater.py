@@ -147,7 +147,11 @@ def run():
     log.info(f"{action} trailing period in professional summary.")
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
+        browser = p.chromium.launch(
+            headless=True,
+            executable_path="/opt/pw-browsers/chromium-1243/chrome-linux64/chrome",
+            args=["--no-sandbox", "--disable-dev-shm-usage"],
+        )
         context = browser.new_context(
             user_agent=(
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
