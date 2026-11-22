@@ -5,7 +5,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PYTHON="$(which python3)"
+PYTHON="$(which python3.13 2>/dev/null || which python3)"
 SCRIPT="$SCRIPT_DIR/naukri_updater.py"
 ENV_FILE="$SCRIPT_DIR/.env"
 
