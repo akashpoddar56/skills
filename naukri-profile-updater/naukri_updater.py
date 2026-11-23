@@ -147,7 +147,13 @@ def run():
     log.info(f"{action} trailing period in professional summary.")
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
+        # Use pre-installed Chromium in cloud environments
+        chromium_path = "/opt/pw-browsers/chromium"
+        import shutil
+        launch_kwargs = {"headless": True, "args": ["--no-sandbox", "--disable-setuid-sandbox"]}
+        if shutil.which(chromium_path) or os.path.exists(chromium_path):
+            launch_kwargs["executable_path"] = chromium_path
+        browser = p.chromium.launch(**launch_kwargs)
         context = browser.new_context(
             user_agent=(
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
